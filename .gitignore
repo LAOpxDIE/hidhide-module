@@ -1,0 +1,35 @@
+# Build outputs
+*.o
+*.ko
+*.kpm
+*.mod
+*.mod.c
+*.symvers
+*.order
+Module.symvers
+modules.order
+.*.cmd
+.tmp_versions/
+dist/
+pkg/
+ko/
+
+# External dependencies and toolchains
+KernelPatch/
+toolchain/
+
+# Archives, device images, logs and reports
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.img
+*.bin
+*.log
+device-diag-*.txt
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

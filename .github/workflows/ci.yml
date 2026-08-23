@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shell syntax
+        run: |
+          for file in collect.sh customize.sh load.sh post-fs-data.sh service.sh; do
+            dash -n "$file"
+          done
+          bash -n pack.sh scripts/check-release.sh
+      - name: Check release hygiene
+        run: ./scripts/check-release.sh

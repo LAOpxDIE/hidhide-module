@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>HIDHide · 外部 HID 设备伪装</title>
+<style>
+  :root {
+    --bg: #0e0f11;
+    --panel: #17191d;
+    --line: #26292f;
+    --text: #e6e8eb;
+    --dim: #8a9099;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --bad: #f85149;
+    --accent: #58a6ff;
+    --mono: "SF Mono", "JetBrains Mono", Consolas, "Courier New", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    padding: 16px 16px 48px; max-width: 640px; margin: 0 auto;
+  }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 8px 0 16px; }
+  h1 { font-size: 19px; font-weight: 600; letter-spacing: .5px; }
+  h1 span { color: var(--dim); font-weight: 400; font-size: 13px; margin-left: 8px; }
+  .badge {
+    font-size: 12px; padding: 3px 10px; border-radius: 99px;
+    border: 1px solid var(--line); color: var(--dim); white-space: nowrap;
+  }
+  .badge.on  { color: var(--ok);   border-color: var(--ok); }
+  .badge.off { color: var(--warn); border-color: var(--warn); }
+  .badge.err { color: var(--bad);  border-color: var(--bad); }
+  section {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px; margin-bottom: 14px;
+  }
+  section h2 {
+    font-size: 13px; font-weight: 600; color: var(--dim);
+    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px;
+  }
+  .kv { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 14px; }
+  .kv b { color: var(--dim); font-weight: 400; flex-shrink: 0; }
+  .kv span { font-family: var(--mono); font-size: 13px; text-align: right; word-break: break-all; }
+  .banner {
+    border: 1px solid var(--warn); color: var(--warn);
+    border-radius: 10px; padding: 12px 16px; margin-bottom: 14px; font-size: 14px;
+    background: rgba(210,153,34,.08);
+  }
+  .dev {
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 8px; font-family: var(--mono); font-size: 12.5px;
+  }
+  .dev .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .dev .name { font-size: 13.5px; color: var(--text); word-break: break-all; }
+  .dev .meta { color: var(--dim); margin-top: 4px; word-break: break-all; }
+  .tag { font-size: 11px; padding: 2px 8px; border-radius: 4px; flex-shrink: 0; }
+  .tag.usb { background: rgba(248,81,73,.15); color: var(--bad); }
+  .tag.int { background: rgba(63,185,80,.12); color: var(--ok); }
+  .dev.sel { border-color: var(--accent); }
+  button {
+    font: inherit; color: var(--text); background: #22252b;
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 9px 14px; cursor: pointer; font-size: 14px;
+  }
+  button:active { opacity: .7; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #0b0d10; font-weight: 600; width: 100%; padding: 12px; font-size: 15px; }
+  button.small { padding: 4px 10px; font-size: 12.5px; }
+  button.ghost { color: var(--dim); }
+  .row { display: flex; gap: 8px; margin-top: 10px; }
+  .row button { flex: 1; }
+  label.f { display: block; margin: 12px 0 4px; font-size: 13px; color: var(--dim); }
+  input[type=text] {
+    width: 100%; background: #0b0d10; border: 1px solid var(--line);
+    color: var(--text); border-radius: 8px; padding: 9px 12px;
+    font-family: var(--mono); font-size: 13.5px;
+  }
+  input[type=text]:focus { outline: none; border-color: var(--accent); }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .presets button { font-family: var(--mono); font-size: 12.5px; padding: 6px 12px; }
+  .presets button.cur { border-color: var(--accent); color: var(--accent); }
+  #log {
+    font-family: var(--mono); font-size: 12px; color: var(--dim);
+    white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto;
+  }
+  .hidden { display: none; }
+  .hint { font-size: 12.5px; color: var(--dim); margin-top: 10px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>HIDHide <span>外部 HID 设备 → 内置输入设备</span></h1>
+  <div class="badge" id="modBadge">检测中…</div>
+</header>
+
+<div class="banner hidden" id="firstRun">
+  首次使用：默认<b>自动识别模式</b>（当前自动匹配 USB 多点触摸 HID），直接点「保存并应用」即可完成初始化，无需手动选设备。
+</div>
+
+<section>
+  <h2>本机信息</h2>
+  <div class="kv"><b>机型</b><span id="model">—</span></div>
+  <div class="kv"><b>Android</b><span id="android">—</span></div>
+  <div class="kv"><b>内核</b><span id="kernel">—</span></div>
+  <div class="kv"><b>模块文件</b><span id="koFile">—</span></div>
+</section>
+
+<section>
+  <h2>输入设备（点击外接设备选中）</h2>
+  <div id="devList">读取中…</div>
+  <div class="row">
+    <button class="ghost" id="btnRefresh">↻ 刷新设备列表</button>
+  </div>
+</section>
+
+<section id="cfgSec">
+  <h2>伪装配置（默认自动识别，通常无需修改）</h2>
+  <label class="f">目标 VID / PID（留空 = 使用内置 HID 自动匹配策略，推荐）</label>
+  <div style="display:flex;gap:8px">
+    <input type="text" id="vid" placeholder="自动">
+    <input type="text" id="pid" placeholder="自动">
+  </div>
+  <label class="f">伪装驱动名（照抄目标机型内置屏驱动）</label>
+  <input type="text" id="fakeName" value="goodix_ts">
+  <div class="presets" id="namePresets"></div>
+  <label class="f">伪装物理路径</label>
+  <input type="text" id="fakePhys" value="i2c/1-005d">
+  <div class="row">
+    <button class="primary" id="btnApply" style="flex:2">保存并应用</button>
+    <button class="ghost" id="btnReset">重置</button>
+  </div>
+  <div class="hint">应用后请<b>重新插拔一次外接屏</b>，让它重新注册进内核，伪装才会生效。</div>
+</section>
+
+<section>
+  <h2>执行日志</h2>
+  <div id="log">就绪。</div>
+  <div class="row">
+    <button class="primary" id="btnReport">⇩ 生成诊断报告</button>
+  </div>
+  <div class="hint">报告自动保存到<b>文件管理器 → 下载（Download）</b>目录，文件名 device-diag-*.txt，直接发给开发者即可（每次开机也会自动生成一份）。</div>
+</section>
+
+<script>
+"use strict";
+const MODDIR = "/data/adb/modules/hidhide";
+const CONF   = MODDIR + "/hidhide.conf";
+const $ = id => document.getElementById(id);
+
+/* ---------- KernelSU bridge (raw ksu.exec, promise 化) ---------- */
+function execCmd(cmd, timeout = 9000) {
+  return new Promise((resolve, reject) => {
+    if (!window.ksu || typeof ksu.exec !== "function") {
+      return reject(new Error("NO_BRIDGE"));
+    }
+    const cb = "hh_" + Math.random().toString(36).slice(2);
+    const timer = setTimeout(() => { delete window[cb]; reject(new Error("exec 超时")); }, timeout);
+    window[cb] = (errno, stdout, stderr) => {
+      clearTimeout(timer); delete window[cb];
+      resolve({ errno, stdout: stdout || "", stderr: stderr || "" });
+    };
+    try { ksu.exec(cmd, "{}", cb); }
+    catch (e) { try { ksu.exec(cmd, cb); } catch (e2) { clearTimeout(timer); delete window[cb]; reject(e2); } }
+  });
+}
+
+function log(msg) {
+  const el = $("log");
+  el.textContent += "\n" + msg;
+  el.scrollTop = el.scrollHeight;
+}
+
+/* ---------- 设备信息 ---------- */
+async function loadDeviceInfo() {
+  try {
+    const [model, ver, kernel, ko] = await Promise.all([
+      execCmd("getprop ro.product.model"),
+      execCmd("getprop ro.build.version.release"),
+      execCmd("uname -r"),
+      execCmd("[ -f " + MODDIR + "/hidhide.kpm ] && echo HAS_KPM; [ -f " + MODDIR + "/hidhide.ko ] && echo HAS_KO; echo SCAN_END"),
+    ]);
+    $("model").textContent   = model.stdout.trim() || "?";
+    $("android").textContent = ver.stdout.trim() || "?";
+    $("kernel").textContent  = kernel.stdout.trim() || "?";
+    $("koFile").textContent  = ko.stdout.includes("HAS_KPM") ? "hidhide.kpm ✓ (KPM)" :
+                               (ko.stdout.includes("HAS_KO") ? "hidhide.ko ✓ (LKM)" : "缺失！");
+  } catch (e) {
+    if (e.message === "NO_BRIDGE") showNoBridge(); else log("设备信息读取失败: " + e.message);
+  }
+}
+
+function showNoBridge() {
+  $("log").textContent = "未检测到 KernelSU WebView 桥接（window.ksu）。\n请在 KernelSU 管理器 → 模块 → HIDHide → WebUI 中打开本页。";
+  $("modBadge").textContent = "无桥接";
+  $("modBadge").className = "badge err";
+}
+
+/* ---------- 模块状态 / 配置 ---------- */
+async function loadModuleState() {
+  try {
+    const st = await execCmd("ksud kpm list 2>/dev/null | grep -i hidhide || { for p in /data/adb/modules/*/bin/kpatch /data/adb/ap/bin/kpatch; do [ -x $p ] && $p kpm list 2>/dev/null; done; } | grep -i hidhide || lsmod | grep '^hidhide' || echo NOT_LOADED");
+    const loaded = !st.stdout.includes("NOT_LOADED");
+    const conf = await execCmd("cat " + CONF + " 2>/dev/null || echo NO_CONF");
+    const hasConf = !conf.stdout.includes("NO_CONF");
+
+    $("modBadge").textContent = loaded ? "模块已加载" : "模块未加载";
+    $("modBadge").className = "badge " + (loaded ? "on" : "off");
+    $("firstRun").classList.toggle("hidden", hasConf);
+
+    if (hasConf) {
+      conf.stdout.split("\n").forEach(line => {
+        const m = line.match(/^\s*([A-Z_]+)=("?)(.*?)\2\s*$/);
+        if (!m) return;
+        if (m[1] === "TARGET_VID") $("vid").value = /^(0|0x0+)$/i.test(m[3]) ? "" : m[3];
+        if (m[1] === "TARGET_PID") $("pid").value = /^(0|0x0+)$/i.test(m[3]) ? "" : m[3];
+        if (m[1] === "FAKE_NAME")  $("fakeName").value = m[3];
+        if (m[1] === "FAKE_PHYS")  $("fakePhys").value = m[3];
+      });
+    }
+    if (loaded) {
+      const dmesg = await execCmd("dmesg | grep hidhide | tail -3");
+      if (dmesg.stdout.trim()) log(dmesg.stdout.trim());
+    }
+  } catch (e) { if (e.message === "NO_BRIDGE") showNoBridge(); }
+}
+
+/* ---------- 输入设备解析 ---------- */
+function parseDevices(text) {
+  return text.split(/\n\s*\n/).map(b => {
+    const g = (re) => { const m = b.match(re); return m ? m[1] : ""; };
+    return {
+      bus:     g(/I:\s*Bus=([0-9a-fA-F]+)/),
+      vendor:  g(/I:.*Vendor=([0-9a-fA-F]+)/),
+      product: g(/I:.*Product=([0-9a-fA-F]+)/),
+      name:    g(/N:\s*Name="(.*?)"/),
+      phys:    g(/P:\s*Phys=(\S*)/),
+      handlers:g(/H:\s*Handlers=(.*)/),
+    };
+  }).filter(d => d.name);
+}
+
+async function loadDevices() {
+  try {
+    const r = await execCmd("cat /proc/bus/input/devices");
+    const devs = parseDevices(r.stdout);
+    const box = $("devList");
+    box.innerHTML = "";
+    if (!devs.length) { box.textContent = "未读到任何输入设备。"; return; }
+    devs.forEach(d => {
+      const isUsb = d.bus.toLowerCase() === "0003";
+      const el = document.createElement("div");
+      el.className = "dev" + (isUsb ? "" : " int");
+      el.innerHTML =
+        '<div class="top"><span class="name"></span>' +
+        '<span class="tag ' + (isUsb ? "usb" : "int") + '">' + (isUsb ? "USB 外接" : "内置") + "</span></div>" +
+        '<div class="meta"></div>';
+      el.querySelector(".name").textContent = d.name;
+      el.querySelector(".meta").textContent =
+        "VID:PID = 0x" + d.vendor.toUpperCase() + ":0x" + d.product.toUpperCase() +
+        (d.phys ? "  |  " + d.phys : "") + (d.handlers ? "  |  " + d.handlers : "");
+      if (isUsb) {
+        el.style.cursor = "pointer";
+        el.onclick = () => {
+          document.querySelectorAll(".dev").forEach(x => x.classList.remove("sel"));
+          el.classList.add("sel");
+          $("vid").value = "0x" + d.vendor.toUpperCase();
+          $("pid").value = "0x" + d.product.toUpperCase();
+          log("已选中: " + d.name + " (0x" + d.vendor.toUpperCase() + ":0x" + d.product.toUpperCase() + ")");
+        };
+      }
+      box.appendChild(el);
+    });
+  } catch (e) { if (e.message === "NO_BRIDGE") showNoBridge(); else log("设备列表读取失败: " + e.message); }
+}
+
+/* ---------- 应用 / 重置 ---------- */
+async function apply() {
+  let vid = $("vid").value.trim(), pid = $("pid").value.trim();
+  const name = $("fakeName").value.trim(), phys = $("fakePhys").value.trim();
+  /* 留空 = 自动识别模式（vid=0） */
+  const autoMode = (vid === "" && pid === "");
+  if (!autoMode) {
+    if (!/^0x[0-9a-fA-F]{1,4}$/.test(vid) || !/^0x[0-9a-fA-F]{1,4}$/.test(pid)) {
+      return log("✗ VID/PID 要么都留空（自动识别），要么都填 0xXXXX");
+    }
+  } else { vid = "0"; pid = "0"; }
+  /* name/phys 会拼进 root shell 命令，必须白名单校验，防止单引号逃逸注入 */
+  if (!/^[A-Za-z0-9_.\/-]{1,63}$/.test(name) || !/^[A-Za-z0-9_.\/-]{1,63}$/.test(phys)) {
+    return log("✗ 伪装名/物理路径只允许字母、数字和 _ . / -");
+  }
+
+  const conf = "TARGET_VID=" + vid + "\nTARGET_PID=" + pid +
+               "\nFAKE_NAME=\"" + name + "\"\nFAKE_PHYS=\"" + phys + "\"\n";
+  log("写入配置…");
+  try {
+    let r = await execCmd("printf '%s' '" + conf.replace(/'/g, "'\\''") + "' > " + CONF);
+    if (r.errno !== 0) return log("✗ 写配置失败: " + r.stderr);
+
+    log("加载模块（自动选择引擎）…");
+    const kpmArgs = "vid=" + vid + " pid=" + pid + " name=" + name + " phys=" + phys;
+    r = await execCmd("sh " + MODDIR + "/load.sh '" + kpmArgs + "' 2>&1");
+    const out = (r.stdout || "").trim();
+    if (out.includes("OK engine=") || out.includes("ALREADY")) {
+      log("✓ " + out);
+      log("现在请重新插拔一次外接屏，然后点「刷新设备列表」验证。");
+      if (window.ksu && ksu.toast) ksu.toast("HIDHide 配置已应用");
+    } else {
+      log("✗ 加载失败: " + (out || r.stderr));
+      log("提示: 原版 KernelSU/Magisk 需先安装 KPatch-Next 模块；APatch 请在管理器嵌入。");
+    }
+    $("firstRun").classList.add("hidden");
+    loadModuleState();
+  } catch (e) { log("✗ " + e.message); }
+}
+
+async function resetCfg() {
+  try {
+    await execCmd("rm -f " + CONF + "; ksud kpm unload hidhide 2>/dev/null; for p in /data/adb/modules/*/bin/kpatch; do [ -x $p ] && $p kpm unload hidhide 2>/dev/null; done; rmmod hidhide 2>/dev/null; echo DONE");
+    log("已删除配置并卸载模块。重启后将以内置默认参数加载。");
+    loadModuleState();
+  } catch (e) { log("✗ " + e.message); }
+}
+
+/* ---------- 预设 ---------- */
+["goodix_ts", "fts_ts", "sec_touchscreen", "himax_ts", "ilitek_ts"].forEach(n => {
+  const b = document.createElement("button");
+  b.textContent = n; b.className = "small";
+  b.onclick = () => {
+    $("fakeName").value = n;
+    document.querySelectorAll("#namePresets button").forEach(x => x.classList.remove("cur"));
+    b.classList.add("cur");
+  };
+  $("namePresets").appendChild(b);
+});
+
+$("btnApply").onclick = apply;
+$("btnReset").onclick = resetCfg;
+$("btnRefresh").onclick = () => { loadDevices(); log("设备列表已刷新。"); };
+$("btnReport").onclick = async () => {
+  log("正在生成诊断报告…");
+  try {
+    const r = await execCmd("sh " + MODDIR + "/collect.sh", 20000);
+    const out = (r.stdout || "").trim();
+    out.split("\n").forEach(l => log(l));
+    const m = out.match(/REPORT_PATH=(.*)/);
+    if (m) {
+      log("✓ 报告已保存: " + m[1] + "（文件管理器 → 下载）");
+      if (window.ksu && ksu.toast) ksu.toast("报告已保存到下载目录");
+      const rep = await execCmd("cat '" + m[1] + "'");
+      log("----- 报告内容 -----\n" + rep.stdout.trim());
+    } else {
+      log("✗ 未取到报告路径: " + (r.stderr || "无输出"));
+    }
+  } catch (e) { log("✗ " + e.message); }
+};
+
+loadDeviceInfo();
+loadModuleState();
+loadDevices();
+</script>
+</body>
+</html>

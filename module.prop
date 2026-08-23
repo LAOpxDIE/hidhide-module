@@ -1,0 +1,6 @@
+id=hidhide
+name=HID External Device Hider
+version=v1.5.0
+versionCode=6
+author=HIDHide contributors
+description=Rewrite an external HID input device identity at registration (KPM or kprobe LKM)
