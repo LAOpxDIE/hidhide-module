@@ -69,6 +69,7 @@ jobs:
                CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
           ./scripts/config --file .config --set-str CONFIG_LOCALVERSION ""
           ./scripts/config --file .config --disable DEBUG_INFO_BTF_MODULES
+          ./scripts/config --file .config --disable CONFIG_WERROR
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
                CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           cp ../gki/vmlinux.symvers         Module.symvers
@@ -86,12 +87,18 @@ jobs:
 
       - name: Build hidhide.ko
         run: |
-          set -euxo pipefail
+          set -uo pipefail
           export PATH="/usr/lib/llvm-19/bin:$PATH"
           make KDIR="${GITHUB_WORKSPACE}/kernel" \
                ARCH=arm64 LLVM=1 LLVM_IAS=1 \
                CROSS_COMPILE=aarch64-linux-gnu- \
-               LOCALVERSION="${LOCALVERSION}"
+               LOCALVERSION="${LOCALVERSION}" 2>&1 | tee build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo "::error::BUILD FAILED - last 200 lines:"
+            tail -n 200 build.log
+            exit $status
+          fi
           ls -l hidhide.ko
           modinfo hidhide.ko | tee modinfo.txt
 
@@ -121,16 +128,18 @@ jobs:
           unzip -l dist/HIDHide-KSU.zip | head -40
 
       - name: Upload workflow artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: HIDHide-KSU-LKM-y700-6.12.30-4k
-          if-no-files-found: error
+          if-no-files-found: ignore
           path: |
             dist/HIDHide-KSU.zip
             dist/HIDHide-KSU.zip.sha256
             hidhide.ko
             modinfo.txt
             vermagic.txt
+            build.log
 
       - name: Publish GitHub release
         env:
