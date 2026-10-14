@@ -43,10 +43,17 @@ MODULE_PARM_DESC(target_pid, "USB PID of the external HID device to rewrite");
 MODULE_PARM_DESC(fake_name,  "Name to present (builtin panel driver name)");
 MODULE_PARM_DESC(fake_phys,  "Physical path to present (fake I2C topology)");
 
+/* Get the first function argument (x0) from a kprobe pt_regs. */
+#if defined(__aarch64__)
+#define HIDHIDE_ARG0(regs) ((void *)((struct pt_regs *)(regs))->regs[0])
+#else
+#define HIDHIDE_ARG0(regs) ((void *)PT_REGS_PARM1(regs))
+#endif
+
 static int __kprobes hidhide_pre(struct kprobe *p, struct pt_regs *regs)
 {
 	/* input_register_device(struct input_dev *dev): arm64 arg0 = x0 */
-	struct input_dev *dev = (struct input_dev *)PT_REGS_PARM1(regs);
+	struct input_dev *dev = (struct input_dev *)HIDHIDE_ARG0(regs);
 
 	if (!dev)
 		return 0;
