@@ -54,11 +54,21 @@ jobs:
           set -euxo pipefail
           mkdir -p gki
           BASE="https://ci.android.com/builds/submitted/${GKI_BUILD}/${GKI_TARGET}/latest"
+          # ci.android.com GET returns Artifact Viewer HTML; parse the signed
+          # GCS artifactUrl from it to get the real binary artifact.
           for f in vmlinux.symvers System.map modules.builtin modules.builtin.modinfo; do
             echo ">> $f"
-            wget -q --show-progress -O "gki/$f" "$BASE/$f"
+            wget -q -O "/tmp/view-$f.html" "$BASE/$f"
+            url=$(grep -oP '"artifactUrl":"\K[^"]+' "/tmp/view-$f.html" | sed 's/\\u0026/\&/g')
+            if [ -z "$url" ]; then echo "no artifactUrl for $f"; exit 1; fi
+            wget -q --show-progress -O "gki/$f" "$url"
+            if head -c 64 "gki/$f" | grep -qi "doctype\|<html"; then
+              echo "got HTML viewer instead of $f"; exit 1
+            fi
           done
           ls -l gki/
+          head -2 gki/vmlinux.symvers
+          head -2 gki/System.map
 
       - name: Prepare kernel tree (gki_defconfig, 4k)
         run: |
@@ -141,7 +151,20 @@ jobs:
             vermagic.txt
             build.log
 
+      - name: Publish debug release on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          TAG="debug-run${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          gh release create "$TAG" build.log \
+            --target build/y700-lkm --prerelease \
+            --title "debug build log run${GITHUB_RUN_NUMBER}" \
+            --notes "build.log for failed run ${GITHUB_RUN_NUMBER}" || true
+
       - name: Publish GitHub release
+        if: success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
