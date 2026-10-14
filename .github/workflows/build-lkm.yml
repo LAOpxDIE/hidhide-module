@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - build/y700-lkm
-    paths:
-      - .github/workflows/build-lkm.yml
   workflow_dispatch:
 
 permissions:
