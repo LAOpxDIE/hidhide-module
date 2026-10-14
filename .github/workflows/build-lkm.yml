@@ -1,0 +1,157 @@
+name: Build HIDHide LKM (Y700 5th, android16-6.12, 4k)
+
+on:
+  push:
+    branches:
+      - build/y700-lkm
+    paths:
+      - .github/workflows/build-lkm.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-lkm:
+    name: Build hidhide.ko against GKI kernel
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      KERNEL_RELEASE: "6.12.30-android16-5-g1750f757fabe-ab13938768-4k"
+      KERNEL_COMMIT: "1750f757fabea014ecc59d327c0c9d3c15ab1e6d"
+      GKI_BUILD: "13938768"
+      GKI_TARGET: "kernel_aarch64"
+      LOCALVERSION: "-android16-5-g1750f757fabe-ab13938768-4k"
+
+    steps:
+      - name: Checkout HIDHide module
+        uses: actions/checkout@v4
+
+      - name: Install build packages
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex cpio rsync wget zip kmod \
+            libssl-dev libelf-dev libdw-dev pahole \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+          wget -q https://apt.llvm.org/llvm.sh -O /tmp/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 19
+          echo "/usr/lib/llvm-19/bin" >> "$GITHUB_PATH"
+
+      - name: Download exact kernel source
+        run: |
+          set -euxo pipefail
+          wget -q --show-progress -O /tmp/kernel.tar.gz \
+            "https://github.com/aosp-mirror/kernel_common/archive/${KERNEL_COMMIT}.tar.gz"
+          mkdir -p kernel
+          tar -xzf /tmp/kernel.tar.gz --strip-components=1 -C kernel
+          head -5 kernel/Makefile
+
+      - name: Download GKI dist artifacts
+        run: |
+          set -euxo pipefail
+          mkdir -p gki
+          BASE="https://ci.android.com/builds/submitted/${GKI_BUILD}/${GKI_TARGET}/latest"
+          for f in vmlinux.symvers System.map modules.builtin modules.builtin.modinfo; do
+            echo ">> $f"
+            wget -q --show-progress -O "gki/$f" "$BASE/$f"
+          done
+          ls -l gki/
+
+      - name: Prepare kernel tree (gki_defconfig, 4k)
+        run: |
+          set -euxo pipefail
+          cd kernel
+          export PATH="/usr/lib/llvm-19/bin:$PATH"
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+               CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
+          ./scripts/config --file .config --set-str CONFIG_LOCALVERSION ""
+          ./scripts/config --file .config --disable DEBUG_INFO_BTF_MODULES
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+               CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          cp ../gki/vmlinux.symvers         Module.symvers
+          cp ../gki/modules.builtin.modinfo modules.builtin.modinfo
+          cp ../gki/modules.builtin         modules.builtin
+          cp ../gki/System.map              System.map
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+               CROSS_COMPILE=aarch64-linux-gnu- \
+               LOCALVERSION="${LOCALVERSION}" -j"$(nproc)" modules_prepare
+          echo "=== kernel.release ==="
+          cat include/config/kernel.release
+          echo "=== utsrelease.h ==="
+          cat include/generated/utsrelease.h
+          test "$(cat include/config/kernel.release)" = "${KERNEL_RELEASE}"
+
+      - name: Build hidhide.ko
+        run: |
+          set -euxo pipefail
+          export PATH="/usr/lib/llvm-19/bin:$PATH"
+          make KDIR="${GITHUB_WORKSPACE}/kernel" \
+               ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+               CROSS_COMPILE=aarch64-linux-gnu- \
+               LOCALVERSION="${LOCALVERSION}"
+          ls -l hidhide.ko
+          modinfo hidhide.ko | tee modinfo.txt
+
+      - name: Verify vermagic and CRC
+        run: |
+          set -euxo pipefail
+          V=$(modinfo -F vermagic hidhide.ko)
+          echo "vermagic = $V"
+          case "$V" in
+            "${KERNEL_RELEASE} SMP "*)
+              echo "::notice::vermagic matches target kernel"
+              ;;
+            *)
+              echo "::error::vermagic mismatch! expected ${KERNEL_RELEASE} ..."
+              exit 1
+              ;;
+          esac
+          aarch64-linux-gnu-objdump -h hidhide.ko | grep -E "__versions|__mcount_loc"
+          aarch64-linux-gnu-nm -u hidhide.ko || true
+          modinfo -F vermagic hidhide.ko > vermagic.txt
+
+      - name: Pack KernelSU module ZIP
+        run: |
+          set -euxo pipefail
+          ./pack.sh
+          ls -l dist/
+          unzip -l dist/HIDHide-KSU.zip | head -40
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: HIDHide-KSU-LKM-y700-6.12.30-4k
+          if-no-files-found: error
+          path: |
+            dist/HIDHide-KSU.zip
+            dist/HIDHide-KSU.zip.sha256
+            hidhide.ko
+            modinfo.txt
+            vermagic.txt
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          TAG="lkm-y700-5th-6.12.30-run${GITHUB_RUN_NUMBER}"
+          cat > /tmp/notes.md <<EOF
+          # HIDHide LKM (KernelSU installable)
+
+          - Device: Lenovo Legion Y700 5th gen (LKM mode)
+          - Target kernel: ${KERNEL_RELEASE}
+          - Kernel source: aosp-mirror/kernel_common @ ${KERNEL_COMMIT}
+          - GKI artifacts: ci.android.com build ${GKI_BUILD} (${GKI_TARGET}, 4k)
+          - Toolchain: LLVM Clang 19 (gki_defconfig)
+          - vermagic: $(cat vermagic.txt)
+
+          Install HIDHide-KSU.zip via KernelSU manager and reboot.
+          EOF
+          gh release create "$TAG" \
+            dist/HIDHide-KSU.zip dist/HIDHide-KSU.zip.sha256 hidhide.ko \
+            --target build/y700-lkm \
+            --title "HIDHide LKM for Y700 5th (6.12.30 android16 4k)" \
+            --notes-file /tmp/notes.md
